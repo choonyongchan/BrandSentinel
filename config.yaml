@@ -32,10 +32,10 @@ processor:
   parking_signatures: ["domain for sale", "this domain is for sale", "sedo", "bodis", "parking"]
   kit_paths: ["/owa", "/office365", "/webmail", "/login", "/verify", "/invoice"]
 
-  # Brand-scoped toggles:
+  # Brand-scoped toggles: # SAMPLE CONFIGURATION CHANGE HERE
   whitelist_keywords: ["pages.dev", "vercel.app", "webflow.io", "blogspot.", "github.io", "dbs.com", "dbs.com.sg", "posb.com.sg", "dbs.com.hk", "dbs.com.tw", "dbs.com.cn", "dbs.com.mo", "dbsbank.in", "dbs.co.id", "dbsprivatebank.com"]
   blacklist_keywords: ["dbs", "dbsbank", "dbs-bank", "posb", "paylah", "digibank", "dbslogin", "dbs-verify", "dbsverify", "dbs-secure", "dbsupdate", "dbs-otp"]
 
-brands:
+brands: # SAMPLE CONFIGURATION CHANGE HERE
   - name: "DBS Bank"
     domains: ["dbs.com", "dbs.com.sg", "posb.com.sg", "dbs.com.hk", "dbs.com.tw", "dbs.com.cn", "dbs.com.mo", "dbsbank.in", "dbs.co.id", "dbsprivatebank.com"]
