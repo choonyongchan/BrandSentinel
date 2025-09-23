@@ -1,0 +1,41 @@
+ingester:
+  enable:
+    crtsh: true
+    urlhaus: true
+    openphish: true
+    urlscan: true
+    phishstats: true
+    threatfox: true
+    otx: false
+  intervals:
+    crtsh: 60
+    urlhaus: 300
+    openphish: 43200
+    urlscan: 120
+    phishstats: 180
+    threatfox: 300
+    otx: 600
+  api_keys:
+    otx: ""
+    urlscan: ""
+
+processor:
+  timeout_s: 8
+  total_timeout_s: 20
+  max_content_bytes: 1048576
+  thresholds:
+    scam: 1
+    non_scam: -1
+
+  # Heuristics (simplified defaults)
+  forbidden_keywords: ["login", "signin", "verify", "password", "2fa", "wallet", "airdrop", "invoice", "refund"]
+  parking_signatures: ["domain for sale", "this domain is for sale", "sedo", "bodis", "parking"]
+  kit_paths: ["/owa", "/office365", "/webmail", "/login", "/verify", "/invoice"]
+
+  # Brand-scoped toggles:
+  whitelist_keywords: ["pages.dev", "vercel.app", "webflow.io", "blogspot.", "github.io", "dbs.com", "dbs.com.sg", "posb.com.sg", "dbs.com.hk", "dbs.com.tw", "dbs.com.cn", "dbs.com.mo", "dbsbank.in", "dbs.co.id", "dbsprivatebank.com"]
+  blacklist_keywords: ["dbs", "dbsbank", "dbs-bank", "posb", "paylah", "digibank", "dbslogin", "dbs-verify", "dbsverify", "dbs-secure", "dbsupdate", "dbs-otp"]
+
+brands:
+  - name: "DBS Bank"
+    domains: ["dbs.com", "dbs.com.sg", "posb.com.sg", "dbs.com.hk", "dbs.com.tw", "dbs.com.cn", "dbs.com.mo", "dbsbank.in", "dbs.co.id", "dbsprivatebank.com"]
