@@ -1,307 +1,226 @@
-"""Domain ingester that seeds the pipeline from open threat intel sources."""
+"""Refactored Ingester: Source handles processing; Ingester only enables sources and provides client/config."""
+import threading
+from .commons import Channel, FetchResult, HTTPClient, RedisClient
+from .config import CONFIG
+from typing import Iterable, Optional, Set, List, Dict, Any, cast
+
 import asyncio
-import re
-import time
-from typing import Iterable, Optional, Set
-from unittest import result
-from urllib.parse import urlparse
+import certstream
+import json
+import os
 
-from h11 import Response
-import tldextract
+# ---- Base Source ----
 
-from .commons import Channel, HTTPClient, RedisModule
-from .config import Config
+class Source:
+    key: str  # enable flag key in YAML
+
+    # Global dedup across all sources
+    VISITED_DOMAINS: Set[str] = set()
+    TARGET_CHANNEL: Channel = Channel.FILTER
+
+    def __init__(self, interval_s: int = 300) -> None:
+        self.interval_s: int = interval_s
+
+    async def start(self) -> Optional[asyncio.Task[Any]]:
+        return asyncio.create_task(self.search(), name=f"src:{self.key}")
+
+    async def search(self) -> None:
+        while True:
+            try:
+                domains: Iterable[str] = await self.get()
+                await self.publish(domains)
+            finally:
+                await asyncio.sleep(self.interval_s)
+
+    async def get(self) -> Iterable[str]:
+        # To be implemented by periodic sources
+        raise NotImplementedError()
+
+    @staticmethod
+    async def publish(domains: Iterable[str]) -> None:
+        for d in domains:
+            if (not d) or (d in Source.VISITED_DOMAINS):
+                continue
+            Source.VISITED_DOMAINS.add(d)
+            await RedisClient.publish(Source.TARGET_CHANNEL, d)
 
 
-class DomainIngester(RedisModule):
-    """Ingester that continuously polls multiple sources and publishes domains."""
+# ---- Concrete Sources ---
 
-    def __init__(self) -> None:
-        """Initialize the ingester and configuration."""
-        super().__init__()
-        self.cfg: Config = Config.load()
-        self.client: HTTPClient = HTTPClient.get()
+class OpenPhish(Source):
+    key = "openphish"
 
-        # API keys
-        self.OTX_API_KEY: str = self.cfg.ingester.api_keys.otx
-        self.URLSCAN_API_KEY: str = self.cfg.ingester.api_keys.urlscan
+    def __init__(self, interval_s: int = 43200) -> None:
+        # Free feed refresh ~12h; verified feed requires subscription.
+        super().__init__(interval_s)
+        self.feed_url: str = "https://openphish.com/feed.txt"
 
-        # Enable/disable sources from YAML
-        en: Config.Ingester.Enable = self.cfg.ingester.enable
-        self.ENABLE_CRTSH: bool = en.crtsh
-        self.ENABLE_URLHAUS: bool = en.urlhaus
-        self.ENABLE_OPENPHISH: bool = en.openphish
-        self.ENABLE_URLSCAN: bool = en.urlscan and bool(self.URLSCAN_API_KEY)
-        self.ENABLE_PHISHSTATS: bool = en.phishstats
-        self.ENABLE_THREATFOX: bool = en.threatfox
-        self.ENABLE_OTX: bool = en.otx and bool(self.OTX_API_KEY)
+    async def get(self) -> Iterable[str]:
+        fetchresult: FetchResult = await HTTPClient.fetch(self.feed_url)
+        txt = fetchresult.html
+        if not txt:
+            return []
+        hosts: Set[str] = set()
+        for line in txt.splitlines():
+            h = HTTPClient.normalize_host(line)
+            if h:
+                hosts.add(h)
+        return hosts
 
-        # Intervals
-        iv: Config.Ingester.Intervals = self.cfg.ingester.intervals
-        self.INTERVAL_CRTSH: int = iv.crtsh
-        self.INTERVAL_URLHAUS: int = iv.urlhaus
-        self.INTERVAL_OPENPHISH: int = iv.openphish
-        self.INTERVAL_URLSCAN: int = iv.urlscan
-        self.INTERVAL_PHISHSTATS: int = iv.phishstats
-        self.INTERVAL_THREATFOX: int = iv.threatfox
-        self.INTERVAL_OTX: int = iv.otx
 
-        # Dedup
-        self._seen_regs: Set[str] = set()
-        self._lock: asyncio.Lock = asyncio.Lock()
+class PhishTank(Source):
+    key = "phishtank"
 
-        # State
-        self._crtsh_last_id: int = 0
-        self._phishstats_last_id: int = 0
-        self._threatfox_last_id: int = 0
+    def __init__(self, interval_s: int = 3600, api_key: Optional[str] = None) -> None:
+        super().__init__(interval_s)
+        # Public JSON feed
+        self.feed_url = (f"http://data.phishtank.com/data/{api_key}/online-valid.json" 
+                         if api_key 
+                         else "http://data.phishtank.com/data/online-valid.json")
 
-        # Blacklisted Words (for CRT SH filtering)
-        self._blacklist_keywords: list[str] = self.cfg.processor.blacklist_keywords or []
+    async def get(self) -> Iterable[str]:
+        fetchresult: FetchResult = await HTTPClient.fetch(self.feed_url)
+        txt = fetchresult.html
+        if not txt:
+            return []
+        try:
+            data_any: Any = json.loads(txt)
+        except Exception:
+            return []
+        hosts: Set[str] = set()
+        if isinstance(data_any, list):
+            items: List[Dict[str, Any]] = cast(List[Dict[str, Any]], data_any)
+            for item in items:
+                u = item.get("url")
+                if not u:
+                    continue
+                h = HTTPClient.normalize_host(str(u))
+                if h:
+                    hosts.add(h)
+        return hosts
 
-        # Target channel
-        self.target_channel: Channel = Channel.PROCESS
 
-    async def start(self) -> None:
-        """Start polling all enabled sources."""
-        tasks: list[asyncio.Task] = []
-        if self.ENABLE_CRTSH:
-            tasks.append(asyncio.create_task(self._run_forever(self._poll_crtsh, self.INTERVAL_CRTSH, "crt.sh")))
-        if self.ENABLE_URLHAUS:
-            tasks.append(asyncio.create_task(self._run_forever(self._poll_urlhaus, self.INTERVAL_URLHAUS, "urlhaus")))
-        if self.ENABLE_OPENPHISH:
-            tasks.append(asyncio.create_task(self._run_forever(self._poll_openphish, self.INTERVAL_OPENPHISH, "openphish")))
-        if self.ENABLE_URLSCAN:
-            tasks.append(asyncio.create_task(self._run_forever(self._poll_urlscan, self.INTERVAL_URLSCAN, "urlscan")))
-        if self.ENABLE_PHISHSTATS:
-            tasks.append(asyncio.create_task(self._run_forever(self._poll_phishstats, self.INTERVAL_PHISHSTATS, "phishstats")))
-        if self.ENABLE_THREATFOX:
-            tasks.append(asyncio.create_task(self._run_forever(self._poll_threatfox, self.INTERVAL_THREATFOX, "threatfox")))
-        if self.ENABLE_OTX:
-            tasks.append(asyncio.create_task(self._run_forever(self._poll_otx, self.INTERVAL_OTX, "otx")))
+class URLhaus(Source):
+    key = "urlhaus"
 
-        if not tasks:
-            print("Ingester: no sources enabled.")
+    def __init__(self, interval_s: int = 300) -> None:
+        super().__init__(interval_s)
+        self.feed_url = "https://urlhaus.abuse.ch/downloads/text_online/"
+
+    async def get(self) -> Iterable[str]:
+        fetchresult: FetchResult = await HTTPClient.fetch(self.feed_url)
+        txt = fetchresult.html
+        if not txt:
+            return []
+        hosts: Set[str] = set()
+        for line in txt.splitlines():
+            if not line or line.startswith("#"):
+                continue
+            h = HTTPClient.normalize_host(line)
+            if h:
+                hosts.add(h)
+        return hosts
+
+class CertStream(Source):
+    key = "certstream"
+
+    def __init__(self, interval_s: int = 5) -> None:
+        super().__init__(interval_s)
+        self._buffer: Set[str] = set()
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+        self._start_listener_thread()
+
+    def _start_listener_thread(self) -> None:
+        if self._thread and self._thread.is_alive():
             return
 
-        print(f"Ingester started with {len(tasks)} source(s).")
-        await asyncio.gather(*tasks)
-
-
-    async def _run_forever(self, fn, interval: int, name: str) -> None:
-        """Run the given async function in a loop with the specified interval."""
-        while True:
-            t0: float = time.time()
+        def target() -> None:
             try:
-                await fn()
-            except Exception as e:
-                print(f"[{name}] error: {e}")
-            await asyncio.sleep(max(1, interval - int(time.time() - t0)))
+                certstream.listen_for_events(self._cert_callback, url="wss://certstream.calidog.io/")
+            except Exception:
+                # listener thread should not crash the whole process; just exit the thread
+                return
 
-    def _is_whitelisted(self, host: str) -> bool:
-        """Check if the host matches any configured whitelist keywords."""
-        wl: list[str] = self.cfg.processor.whitelist_keywords or []
-        host_l: str = host.lower()
-        return any(k for k in wl if k and k.lower() in host_l)
+        self._thread = threading.Thread(target=target, daemon=True)
+        self._thread.start()
 
-    async def _publish_domains(self, domains: Iterable[str], source: str) -> None:
-        """Publish unique registrable domains, dropping whitelisted ones early."""
-        new_count: int = 0
-        async with self._lock:
-            for d in domains:
-                host: Optional[str] = DomainIngester.extract_host(d)
-                if not host or self._is_whitelisted(host):
-                    continue
-                reg: str = DomainIngester.registrable(host)
-                if reg not in self._seen_regs:
-                    self._seen_regs.add(reg)
-                    await self.publish(self.target_channel, reg)
-                    new_count += 1
-        if new_count:
-            print(f"[{source}] published {new_count} new domains")
-
-    # ---- Helpers ----
-    @staticmethod
-    def extract_host(s: str) -> Optional[str]:
-        """Extract the hostname from a URL or domain string.
-
-        This function accepts a URL or bare domain string and returns a cleaned,
-        lowercased hostname without trailing dots. If the input has no scheme,
-        "http://" will be prefixed before parsing. Hostnames that contain
-        characters outside of [a-z0-9.-] or empty/invalid inputs will result in None.
-
-        Args:
-            s (str): The URL or domain string to extract the hostname from.
-
-        Returns:
-            Optional[str]: The extracted hostname in lowercase with trailing dots removed,
-            or None if the input is empty, invalid, or could not be parsed.
+    def _cert_callback(self, message: Any, _context: Any) -> None:
+        """Synchronous callback executed in the certstream listener thread.
+        Collect normalized domains into an in-memory buffer protected by a lock.
         """
-        if not s:
-            raise ValueError("Input string is empty")
-        s = s.strip()
-        if "://" not in s:
-            s = f"http://{s}"
-        host: str = (urlparse(s).hostname or "").strip(".").lower()
-        if host and re.match(r"^[a-z0-9.-]+$", host):
-            return host
-        return None
+        try:
+            if not isinstance(message, dict) or message.get("message_type") != "certificate_update":
+                return
 
-    @staticmethod
-    def registrable(host: str) -> str:
-        """Return the registrable eTLD+1 for deduplication.
+            data = message.get("data", {})
+            if not isinstance(data, dict):
+                return
 
-        Extracts the effective top-level domain plus one label (eTLD+1) from the given host
-        using tldextract. This is useful for normalizing and deduplicating hosts that share
-        the same registrable domain.
+            leaf_cert = data.get("leaf_cert", {})
+            if not isinstance(leaf_cert, dict):
+                return
 
-        Args:
-            host (str): The hostname to extract the registrable domain from.
+            all_domains = leaf_cert.get("all_domains", [])
+            if not isinstance(all_domains, list):
+                return
 
-        Returns:
-            str: The registrable eTLD+1 (for example, "example.co.uk"). If extraction yields no
-            domain/suffix, returns the original host.
-        """
-        ext: tldextract.ExtractResult = tldextract.extract(host)
-        return ".".join(p for p in (ext.domain, ext.suffix) if p) or host
+            hosts = [HTTPClient.normalize_host(str(d)) for d in all_domains if isinstance(d, str)]
+            if not hosts:
+                return
+
+            with self._lock:
+                self._buffer.update(hosts)
+
+        except Exception:
+            # swallow exceptions in thread callback to keep listener running
+            return
+
+    async def get(self) -> Iterable[str]:
+        """Return and purge buffered domains collected by the listener thread."""
+        with self._lock:
+            if not self._buffer:
+                return []
+            items = set(self._buffer)
+            self._buffer.clear()
+        return items
+
+class ManualImport(Source):
+    key = "manual"
+
+    def __init__(self, interval_s: int = 30) -> None:
+        # Poll a local file for new domains
+        super().__init__(interval_s)
+        self.path = "data/manual_domains.txt"
+        self.seen_domains: Set[str] = set()
+
+    async def get(self) -> Iterable[str]:
+        try:
+            if not os.path.exists(self.path):
+                return []
+            hosts: Set[str] = set()
+            with open(self.path, "r", encoding="utf-8") as f:
+                for line in f:
+                    h = HTTPClient.normalize_host(line)
+                    if h and h not in self.seen_domains:
+                        hosts.add(h)
+            self.seen_domains.update(hosts)
+            return hosts
+        except Exception:
+            return []
+
+# ---- Orchestrator ----
+
+class Ingester:
+    """Orchestrates all sources and publishes to Redis via Source helpers."""
+
+    AVAILABLE_SOURCES: list[Source] = [OpenPhish(), PhishTank(), URLhaus(), CertStream(), ManualImport()]
+    ENABLED_SOURCES: list[Source] = [
+            src 
+            for src in AVAILABLE_SOURCES
+            if bool(getattr(CONFIG.ingester.enable, src.key, False))
+        ]
     
     @staticmethod
-    def dedup_wildcards(words: list[str]) -> list[str]:
-        """Keep only minimal strings: if a is substring of b, drop b.
-
-        Deduplicates input and processes words shortest-first so that any longer
-        word containing an already-kept shorter word is skipped.
-        """
-        uniq = sorted(words, key=len)  # drop empties, dedup, shortest first
-        kept: list[str] = []
-        for w in uniq:
-            # If any already-kept (shorter) word is inside w, w would be removed -> skip it
-            if any(k in w for k in kept):
-                continue
-            kept.append(w)
-        return kept
-
-    # ---- Source pollers (kept simple) ----
-
-    async def _poll_crtsh(self) -> None:
-        blacklist: list[str] = self.dedup_wildcards(self._blacklist_keywords)
-        for kw in blacklist:
-            # Get all domains with the keyword in the subdomain
-            url: str = f"https://crt.sh/?q=%25{kw}%25.%25&output=json"
-            r: Response = await self.client.get(url, timeout=300) # It is a big file
-            if r.status_code != 200:
-                continue
-            try:
-                data: list[dict] = r.json()
-            except Exception:
-                continue
-            max_id: int = self._crtsh_last_id
-            domains: Set[str] = set()
-            for row in data:
-                cid: int = row.get("id", 0)
-                if cid <= self._crtsh_last_id:
-                    continue # ID is sorted descending
-                name_value: str = row.get("name_value", "").lower()
-                for name in name_value.splitlines():
-                    if name and "*" not in name:
-                        host: Optional[str] = DomainIngester.extract_host(name)
-                        if host:
-                            domains.add(host)
-                max_id = max(max_id, cid)
-            if domains:
-                await self._publish_domains(domains, "crt.sh")
-                self._crtsh_last_id = max_id
-
-    async def _poll_urlhaus(self) -> None:
-        url: str = "https://urlhaus.abuse.ch/downloads/text_online/"
-        r = await self.client.get(url, timeout=20)
-        if r.status_code != 200:
-            return
-        data: str = r.text or ""
-        urls: list[str] = [l.strip() for l in data.splitlines()]
-        hosts: list[str] = [DomainIngester.extract_host(u) for u in urls]
-        await self._publish_domains([h for h in hosts if h], "urlhaus")
-
-    async def _poll_openphish(self) -> None:
-        # Once every 12 hours.
-        url: str = "https://openphish.com/feed.txt"
-        r = await self.client.get(url, timeout=20)
-        if r.status_code != 200:
-            return
-        data: str = r.text or ""
-        urls: list[str] = [l.strip() for l in data.splitlines()]
-        hosts: list[str] = [DomainIngester.extract_host(u) for u in urls]
-        await self._publish_domains([h for h in hosts if h], "openphish")
-
-    async def _poll_urlscan(self) -> None:
-        # NEED API KEY. UNTESTED.
-        url: str = "https://urlscan.io/api/v1/search/?q=page.domain.keyword:*&size=100&sort=desc"
-        headers: dict[str, str] = {"API-Key": self.URLSCAN_API_KEY}
-        r = await self.client.get(url, headers=headers, timeout=20)
-        if r.status_code != 200:
-            return
-        data = r.json()
-        domains: Set[str] = set()
-        for res in data.get("results", []):
-            page = res.get("page") or {}
-            d = page.get("domain") or page.get("apexDomain")
-            if d:
-                domains.add(DomainIngester.extract_host(d))
-        await self._publish_domains(domains, "urlscan")
-
-    async def _poll_phishstats(self) -> None:
-        url = "https://api.phishstats.info/api/phishing?_sort=-date"
-        r = await self.client.get(url, timeout=20)
-        if r.status_code != 200:
-            return
-        try:
-            data = r.json()
-        except Exception:
-            return
-        max_id: int = self._phishstats_last_id
-        domains: Set[str] = set()
-        for row in data:
-            cid: int = row.get("id", 0)
-            if cid <= self._phishstats_last_id:
-                break # ID is sorted descending
-            url = row.get("url", "").lower()
-            domains.add(DomainIngester.extract_host(url))
-            max_id = max(max_id, cid)
-        if domains:
-            await self._publish_domains(domains, "phishstats")
-            self._phishstats_last_id = max_id
-
-    async def _poll_threatfox(self) -> None:
-        url = "https://threatfox.abuse.ch/export/json/domains/recent/"
-        r = await self.client.post(url, timeout=20)
-        if r.status_code != 200:
-            return
-        try:
-            data = r.json()
-        except Exception:
-            return
-        max_id: int = self._threatfox_last_id
-        domains: Set[str] = set()
-        for cid, item in data.items():
-            url = item[0].get("ioc_value", "").lower()
-            domains.add(DomainIngester.extract_host(url))
-            max_id = max(max_id, int(cid))
-        if domains:
-            await self._publish_domains(domains, "threatfox")
-            self._threatfox_last_id = max_id
-
-    async def _poll_otx(self) -> None:
-        # UNTESTED.
-        headers = {"X-OTX-API-KEY": self.OTX_API_KEY}
-        url = "https://otx.alienvault.com/api/v1/pulses/subscribed?page=1"
-        r = await self.client.get(url, headers=headers, timeout=20)
-        if r.status_code != 200:
-            return
-        data = r.json()
-        domains: Set[str] = set()
-        for p in data.get("results", []) or []:
-            for ind in p.get("indicators", []) or []:
-                if ind.get("type", "").lower() in ("domain", "hostname", "url"):
-                    h = DomainIngester.extract_host(ind.get("indicator") or "")
-                    if h:
-                        domains.add(h)
-        await self._publish_domains(domains, "otx")
+    async def start() -> None:
+        await asyncio.gather(*(src.start() for src in Ingester.ENABLED_SOURCES))

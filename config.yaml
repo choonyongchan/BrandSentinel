@@ -1,31 +1,18 @@
 ingester:
   enable:
-    crtsh: true
-    urlhaus: true
     openphish: true
-    urlscan: true
-    phishstats: true
-    threatfox: true
-    otx: false
-  intervals:
-    crtsh: 60
-    urlhaus: 300
-    openphish: 43200
-    urlscan: 120
-    phishstats: 180
-    threatfox: 300
-    otx: 600
-  api_keys:
-    otx: ""
-    urlscan: ""
+    phishtank: false #false
+    urlhaus: true
+    certstream: true
+    manual: true
 
 processor:
   timeout_s: 8
   total_timeout_s: 20
   max_content_bytes: 1048576
   thresholds:
-    scam: 1
-    non_scam: -1
+    scam: 0.5
+    non_scam: 0.5
 
   # Heuristics (simplified defaults)
   forbidden_keywords: ["login", "signin", "verify", "password", "2fa", "wallet", "airdrop", "invoice", "refund"]
@@ -38,4 +25,10 @@ processor:
 
 brands: # SAMPLE CONFIGURATION CHANGE HERE
   - name: "DBS Bank"
-    domains: ["dbs.com", "dbs.com.sg", "posb.com.sg", "dbs.com.hk", "dbs.com.tw", "dbs.com.cn", "dbs.com.mo", "dbsbank.in", "dbs.co.id", "dbsprivatebank.com"]
+    valid_domains: ["dbs.com", "dbs.com.sg", "posb.com.sg", "dbs.com.hk", "dbs.com.tw", "dbs.com.cn", "dbs.com.mo", "dbsbank.in", "dbs.co.id", "dbsprivatebank.com"]
+    domain_accept_keywords: ["dbs", "dbsbank", "dbs-bank", "posb", "paylah", "digibank"]
+    domain_reject_keywords: ["login", "signin", "verify", "password"]
+
+counter:
+  enable: true
+  interval_s: 60
