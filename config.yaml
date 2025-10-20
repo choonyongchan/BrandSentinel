@@ -7,9 +7,6 @@ ingester:
     manual: true
 
 processor:
-  timeout_s: 8
-  total_timeout_s: 20
-  max_content_bytes: 1048576
   thresholds:
     scam: 0.5
     non_scam: 0.5
@@ -27,7 +24,12 @@ brands: # SAMPLE CONFIGURATION CHANGE HERE
   - name: "DBS Bank"
     valid_domains: ["dbs.com", "dbs.com.sg", "posb.com.sg", "dbs.com.hk", "dbs.com.tw", "dbs.com.cn", "dbs.com.mo", "dbsbank.in", "dbs.co.id", "dbsprivatebank.com"]
     domain_accept_keywords: ["dbs", "dbsbank", "dbs-bank", "posb", "paylah", "digibank"]
-    domain_reject_keywords: ["login", "signin", "verify", "password"]
+    domain_reject_keywords: []
+
+  - name: "UOB Bank"
+    valid_domains: ["uob.com.sg", "uobgroup.com"]
+    domain_accept_keywords: ["uob", "uobbank", "uob-bank"]
+    domain_reject_keywords: []
 
 counter:
   enable: true

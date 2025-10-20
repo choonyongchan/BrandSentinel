@@ -28,9 +28,6 @@ class ProcessorThresholds:
 
 @dataclass
 class ProcessorConfig:
-    timeout_s: float
-    total_timeout_s: float
-    max_content_bytes: int
     thresholds: ProcessorThresholds
     # brand-scoped lists
     whitelist_keywords: List[str]
@@ -112,9 +109,6 @@ class Config:
         thresholds_raw = Config._require_dict(processor_raw, "thresholds")
 
         processor = ProcessorConfig(
-            timeout_s=float(Config._require(processor_raw, "timeout_s")),
-            total_timeout_s=float(Config._require(processor_raw, "total_timeout_s")),
-            max_content_bytes=int(Config._require(processor_raw, "max_content_bytes")),
             thresholds=ProcessorThresholds(
                 scam=int(Config._require(thresholds_raw, "scam")),
                 non_scam=int(Config._require(thresholds_raw, "non_scam")),
@@ -134,7 +128,7 @@ class Config:
                 raise ValueError("Each brand entry must be a mapping")
             b: Dict[str, Any] = cast(Dict[str, Any], b_any)
             name_val: Optional[Any] = b.get("name")
-            name: Optional[str] = None if name_val is None else str(name_val)
+            name: str = str(name_val)
             brands.append(
                 Brand(
                     name=name,
