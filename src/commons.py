@@ -122,16 +122,27 @@ class HTTPClient:
     async def fetch(url: str, headers: dict[str, str] = {}, timeout: int = 20) -> FetchResult:
         t0: float = time.time()
         client: httpx.AsyncClient = HTTPClient.get()
-        resp = await client.get(url, headers=headers, timeout=timeout, follow_redirects=True)
-        return FetchResult(
-            url=url,
-            status=resp.status_code,
-            headers={k.lower(): v for k, v in resp.headers.items()},
-            html=resp.text,
-            history=[h.status_code for h in getattr(resp, "history", [])],
-            final_url=str(resp.url),
-            elapsed_ms=round((time.time() - t0) * 1000, 1),
-        )
+        try:
+            resp = await client.get(url, headers=headers, timeout=timeout, follow_redirects=True)
+            return FetchResult(
+                url=url,
+                status=resp.status_code,
+                headers={k.lower(): v for k, v in resp.headers.items()},
+                html=resp.text,
+                history=[h.status_code for h in getattr(resp, "history", [])],
+                final_url=str(resp.url),
+                elapsed_ms=round((time.time() - t0) * 1000, 1),
+            )
+        except Exception:
+            return FetchResult(
+                url=url,
+                status=500,
+                headers={},
+                html="",
+                history=[],
+                final_url="",
+                elapsed_ms=round((time.time() - t0) * 1000, 1),
+            )
 
 
     # Streaming sources can override run() instead of poll().
