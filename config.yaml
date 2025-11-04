@@ -23,7 +23,7 @@ processor:
 brands: # SAMPLE CONFIGURATION CHANGE HERE
   - name: "DBS Bank"
     valid_domains: ["dbs.com", "dbs.com.sg", "posb.com.sg", "dbs.com.hk", "dbs.com.tw", "dbs.com.cn", "dbs.com.mo", "dbsbank.in", "dbs.co.id", "dbsprivatebank.com"]
-    domain_accept_keywords: ["dbs", "dbsbank", "dbs-bank", "posb", "paylah", "digibank"]
+    domain_accept_keywords: ["dbs.", ".dbs", "dbsbank",b "dbs-bank", "posb", "paylah", "digibank"]
     domain_reject_keywords: []
 
   - name: "UOB Bank"

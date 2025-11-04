@@ -2,7 +2,8 @@
 
 Proactive detection of scam, fraudulent, and impersonation websites to protect your brand's digital presence.
 
-![image](./docs/BrandSentinel.jpg)
+<img src="./docs/BrandSentinel.png" width="300"> 
+<img src="./docs/BrandSentinel.jpg" width="300">
 
 ## Credits  
 
@@ -43,11 +44,11 @@ Brand Sentinel operates on a three-stage pipeline: Ingestion, Detection, and Tri
 ### 1. Data Ingestion: The Sourcing Pipeline
 To provide robust and timely intelligence, we aggregate data from a variety of trusted, open-source threat feeds. This multi-source approach ensures broader coverage of newly emerging threats. The choice of free and open-source feeds makes this tool accessible to everyone.
 Our core ingestion sources include:
- * crt.sh: Monitors certificate transparency logs to find newly issued SSL certificates for domains that might be typosquatting your brand (e.g., go0gle.com instead of google.com). This is often the earliest signal of a planned attack.
+ * CertStream: Monitors certificate transparency logs to find new domains through newly issued SSL certificates for domains. This could be an early signal of a planned attack.
  * URLhaus: A project from abuse.ch that collects and shares URLs distributing malware.
  * OpenPhish: A community feed that provides active phishing URLs.
  * PhishStats: A real-time phishing data provider with a publicly accessible API.
- * ThreatFox: Another project by abuse.ch focused on sharing indicators of compromise (IOCs) associated with malware.
+ * Manual File Ingestion: Import suspicious domains from your existing Threat Intelligence sources.
 Brand Sentinel is also designed to be easily extended with commercial, subscription-based data sources like URLScan.io or OTX for organizations requiring even deeper intelligence.
 ### 2. Detection Engine: The Heuristic Model
 A single indicator is rarely enough to condemn a domain. Instead of relying on simple signatures, Brand Sentinel uses an ensemble of heuristics, where each heuristic acts as a weighted signal. Some signals are conclusive (e.g., a HTTP 404 status), while others are contributing (e.g., a newly registered SSL certificate). The cumulative score determines the final classification.
