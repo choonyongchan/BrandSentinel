@@ -1,18 +1,22 @@
 services:
-  redis:
-    image: redis:latest
-    container_name: redis
+  prefect-server:
+    image: prefecthq/prefect:3-latest
+    container_name: prefect-server
+    command: prefect server start --host 0.0.0.0
+    environment:
+      PREFECT_SERVER_DATABASE_CONNECTION_URL: "sqlite+aiosqlite:////data/prefect.db"
     ports:
-      - "6380:6379"
+      - "4200:4200"
+    volumes:
+      - prefect_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health')"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 5s
+      start_period: 15s
     restart: unless-stopped
-    volumes:
-      - redis_data:/data
 
 volumes:
-  redis_data:
+  prefect_data:

@@ -1,36 +1,88 @@
 ingester:
   enable:
     openphish: true
-    phishtank: false #false
+    phishtank: true
     urlhaus: true
     certstream: true
     manual: true
+    certpolska: true       # CERT Polska (NASK) — human-vetted financial phishing domains, every 5 min
+    phishingdatabase: true # Phishing.Database — PyFunceble-validated active domains, daily
+    phishingarmy: true     # Phishing Army extended — aggregated from 6 sources, every 6 h; CC BY-NC 4.0
+    botvrij: true          # Botvrij.eu — MISP default feed, malware/honeypot IOCs, daily
+    digitalside: true      # DigitalSide Threat-Intel — OSINT malware analysis feed, daily
+    urlhaus_country: true  # URLhaus per-country feeds — SEA/Asia regional coverage, every 10 min
+  # ISO 3166-1 alpha-2 country codes polled by the urlhaus_country source.
+  # Covers Singapore, Malaysia, Thailand, Indonesia, Philippines, Japan,
+  # Hong Kong, Taiwan, South Korea, and China.
+  urlhaus_country_codes: [SG, MY, TH, ID, PH, JP, HK, TW, KR, CN]
+  # Poll intervals in seconds for each source.
+  intervals:
+    openphish: 43200      # 12 h — free feed refresh rate
+    phishtank: 3600       # 1 h
+    urlhaus: 300          # 5 min
+    certpolska: 300       # 5 min — CERT Polska NASK
+    phishingdatabase: 86400  # 24 h — daily update
+    phishingarmy: 21600   # 6 h
+    botvrij: 86400        # 24 h
+    digitalside: 86400    # 24 h
+    urlhaus_country: 600  # 10 min
+    manual: 30            # 30 s — local file poll
 
 processor:
   thresholds:
-    scam: 0.5
-    non_scam: 0.5
+    scam: 0.4               # Normalised score cutoff; ≥40 % of total weight → SCAM
+    lookalike_max_distance: 10    # BrandLookalikeHeuristic: confusable edit-distance ceiling
+    redirect_min_hops: 2          # RedirectCloakingHeuristic: minimum redirect-chain depth
+    cloaking_diff_ratio: 0.5      # RedirectCloakingHeuristic: Jaccard-dissimilarity cutoff
+    cloaking_min_content_len: 500 # RedirectCloakingHeuristic: minimum HTML length to compare
+    cert_age_days: 30             # CertAgeHeuristic: certs newer than this (days) are flagged
+    brand_density_threshold: 0.05 # BrandContentDensityHeuristic: brand-word fraction cutoff
+    fast_flux_min_a: 5            # DnsEmailPostureHeuristic: minimum A records for fast-flux
+    fast_flux_max_ttl: 300        # DnsEmailPostureHeuristic: TTL (s) below which DNS is fast-flux
+    subdomain_min_depth: 3        # SubdomainDepthHeuristic: minimum label count to flag
+    new_domain_days: 30           # DomainAgeHeuristic + CtHistoryHeuristic: age threshold
+    ct_few_certs: 2               # CtHistoryHeuristic: ≤ this many CT certs = campaign domain
 
   # Heuristics (simplified defaults)
-  forbidden_keywords: ["login", "signin", "verify", "password", "2fa", "wallet", "airdrop", "invoice", "refund"]
+  # Substrings matched against page content; presence raises the suspicious score.
+  suspicious_content_tokens: ["login", "signin", "verify", "password", "2fa", "wallet", "airdrop", "invoice", "refund"]
+
+  # HTML patterns that identify parked / for-sale pages (triggers BENIGN short-circuit).
   parking_signatures: ["domain for sale", "this domain is for sale", "sedo", "bodis", "parking"]
+
+  # URL path fragments that indicate a deployed phishing kit (triggers SCAM short-circuit).
   kit_paths: ["/owa", "/office365", "/webmail", "/login", "/verify", "/invoice"]
 
-  # Brand-scoped toggles: # SAMPLE CONFIGURATION CHANGE HERE
-  whitelist_keywords: ["pages.dev", "vercel.app", "webflow.io", "blogspot.", "github.io", "dbs.com", "dbs.com.sg", "posb.com.sg", "dbs.com.hk", "dbs.com.tw", "dbs.com.cn", "dbs.com.mo", "dbsbank.in", "dbs.co.id", "dbsprivatebank.com"]
-  blacklist_keywords: ["dbs", "dbsbank", "dbs-bank", "posb", "paylah", "digibank", "dbslogin", "dbs-verify", "dbsverify", "dbs-secure", "dbsupdate", "dbs-otp"]
+  # Domains whose hostname contains any of these substrings are silently dropped — they are
+  # known-good infrastructure (CDNs, official properties) that should never be flagged.
+  trusted_domain_substrings: ["pages.dev", "vercel.app", "webflow.io", "blogspot.", "github.io", "dbs.com", "dbs.com.sg", "posb.com.sg", "dbs.com.hk", "dbs.com.tw", "dbs.com.cn", "dbs.com.mo", "dbsbank.in", "dbs.co.id", "dbsprivatebank.com"]
 
-brands: # SAMPLE CONFIGURATION CHANGE HERE
+  # Domains whose hostname contains any of these substrings are immediately classified as
+  # SCAM without heuristic evaluation (high-confidence brand-abuse patterns).
+  auto_scam_substrings: ["dbs", "dbsbank", "dbs-bank", "posb", "paylah", "digibank", "dbslogin", "dbs-verify", "dbsverify", "dbs-secure", "dbsupdate", "dbs-otp"]
+
+  # High-abuse TLDs: presence in the registrable suffix raises the suspicious score.
+  suspicious_tlds: [xyz, top, click, tk, ml, cf, ga, gq, pw, cc, icu, cyou, buzz, monster, life, beauty, hair, salon, quest]
+
+  # SHA-1 hashes of known-brand favicons (hex-encoded).
+  # Operator-supplied: add the SHA-1 of each brand's official favicon here.
+  brand_favicon_hashes: []
+
+  # CNAME target substrings that indicate bulletproof or abuse-friendly hosting.
+  bulletproof_hosting_substrings: [serverius, stark-industries, stark-ind, m247, ddos-guard, ddosguard, quasinetworks, fozzy, airvm, combahton, b-istyle, sharktech]
+
+brands:
   - name: "DBS Bank"
-    valid_domains: ["dbs.com", "dbs.com.sg", "posb.com.sg", "dbs.com.hk", "dbs.com.tw", "dbs.com.cn", "dbs.com.mo", "dbsbank.in", "dbs.co.id", "dbsprivatebank.com"]
-    domain_accept_keywords: ["dbs.", ".dbs", "dbsbank",b "dbs-bank", "posb", "paylah", "digibank"]
-    domain_reject_keywords: []
+    # The brand's own authoritative hostnames — used by heuristics to distinguish
+    # legitimate infrastructure from impersonators.
+    canonical_domains: ["dbs.com", "dbs.com.sg", "posb.com.sg", "dbs.com.hk", "dbs.com.tw", "dbs.com.cn", "dbs.com.mo", "dbsbank.in", "dbs.co.id", "dbsprivatebank.com"]
+    # A domain must contain at least one of these substrings to reach the classify stage.
+    domain_match_keywords: ["dbs.", ".dbs", "dbsbank", "dbs-bank", "posb", "paylah", "digibank"]
+    # A domain is routed to IRRELEVANT (before classification) if it matches any of these.
+    domain_exclude_keywords: []
 
   - name: "UOB Bank"
-    valid_domains: ["uob.com.sg", "uobgroup.com"]
-    domain_accept_keywords: ["uob", "uobbank", "uob-bank"]
-    domain_reject_keywords: []
+    canonical_domains: ["uob.com.sg", "uobgroup.com"]
+    domain_match_keywords: ["uob", "uobbank", "uob-bank"]
+    domain_exclude_keywords: []
 
-counter:
-  enable: true
-  interval_s: 60
