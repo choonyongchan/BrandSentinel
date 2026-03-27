@@ -41,13 +41,49 @@ With the intelligence gathered by Brand Sentinel, your security team can:
 
 ## ⚙️ How It Works
 Brand Sentinel operates on a three-stage pipeline: Ingestion, Detection, and Triage.
+
+```mermaid
+flowchart TD
+    subgraph Sources["🔌 Ingestion Sources (async workers)"]
+        S1["CertStream\nCT logs · live"]
+        S2["URLhaus\nevery 5 min"]
+        S3["PhishTank\nevery 1 h"]
+        S4["OpenPhish\nevery 12 h"]
+        S5["+ 6 more feeds\nCERT Polska · Phishing.Database\nPhishing Army · Botvrij\nDigitalSide · Manual Import"]
+    end
+
+    Q[("asyncio.Queue\ndedup")]
+
+    S1 & S2 & S3 & S4 & S5 --> Q
+
+    Q --> FT["filter_task\nkeyword accept/reject"]
+    FT -->|irrelevant| IR["irrelevant.txt"]
+    FT -->|relevant| CT
+
+    subgraph CT["classify_task (per domain, async · retries=1)"]
+        BC["build_context\nHTTP · DNS · TLS"]
+        H["15 Heuristics\nlazy · short-circuit"]
+        BC --> H
+    end
+
+    H --> OT["output_task"]
+    OT --> SC["scam.txt"]
+    OT --> INC["inconclusive.txt"]
+    OT --> BN["benign.txt"]
+```
+
 ### 1. Data Ingestion: The Sourcing Pipeline
 To provide robust and timely intelligence, we aggregate data from a variety of trusted, open-source threat feeds. This multi-source approach ensures broader coverage of newly emerging threats. The choice of free and open-source feeds makes this tool accessible to everyone.
 Our core ingestion sources include:
  * CertStream: Monitors certificate transparency logs to find new domains through newly issued SSL certificates for domains. This could be an early signal of a planned attack.
  * URLhaus: A project from abuse.ch that collects and shares URLs distributing malware.
  * OpenPhish: A community feed that provides active phishing URLs.
- * PhishStats: A real-time phishing data provider with a publicly accessible API.
+ * PhishTank: A collaborative clearinghouse for data and information about phishing on the Internet.
+ * CERT Polska: Phishing feed maintained by Poland's national CERT.
+ * Phishing.Database: Community-maintained database of phishing domains.
+ * Phishing Army: Blocklist of phishing websites, updated regularly.
+ * Botvrij.eu: Open-source threat intelligence data sets.
+ * DigitalSide IT-Threat: Italian threat intelligence feed covering malicious domains.
  * Manual File Ingestion: Import suspicious domains from your existing Threat Intelligence sources.
 Brand Sentinel is also designed to be easily extended with commercial, subscription-based data sources like URLScan.io or OTX for organizations requiring even deeper intelligence.
 ### 2. Detection Engine: The Heuristic Model
@@ -80,57 +116,68 @@ Brand Sentinel is built on an asynchronous, event-driven architecture. This desi
 
 ## 🚀 Getting Started: Local Demo
 You can run a local instance of Brand Sentinel to monitor your own brand.
-Prerequisites
- * Docker (for running Redis). Follow 
- * Python 3.9+
+
+### Prerequisites
+ * [Docker](https://docs.docker.com/get-docker/) (for running the Prefect orchestration server)
+ * Python 3.13+
 
 ### Installation & Setup
-0. Install Docker and Redis. Follow the [official Redis' guide](https://redis.io/docs/latest/operate/oss_and_stack/install/install-stack/docker/).
-```bash
-docker-compose up
-```
 
-1.  Clone the repository:
+0. Clone the repository:
 
 ```bash
 git clone https://github.com/your-username/brand-sentinel.git
 cd brand-sentinel
 ```
 
-2. Start Redis using Docker:
-   Redis will act as our message broker for the event-driven system.
-```bash   
-docker run --name brand-sentinel-redis -p 6379:6379 -d redis
+1. Start the Prefect server:
+
+```bash
+docker-compose up -d
+```
+
+2. Point the runtime at the local Prefect server:
+
+```bash
+export PREFECT_API_URL=http://localhost:4200/api
 ```
 
 3. Create and activate a virtual environment:
-```bash   
-python -m venv .venv
-source .venv/bin/activate
+
+```bash
+python -m venv .env
+source .env/bin/activate
 ```
-> On Windows, use: .venv\Scripts\activate
+> On Windows, use: `.env\Scripts\activate`
 
 4. Install dependencies:
-```bash   
+
+```bash
 pip install -r requirements.txt
 ```
 
 5. Configure your brands:
-   Open config.yaml and add the brands you want to monitor under the 'brands' field. Use variations without TLDs.
+   Open `config.yaml` and add the brands you want to monitor under the `brands` field. Use variations without TLDs.
 
 ### Running the Tool
-6. Start the polling process:
+
+6. Start the pipeline:
    The tool will begin ingesting data and analyzing domains.
-```bash   
+
+```bash
 python main.py
 ```
-   Polling will continue until you stop the process with Ctrl+C.
+   The pipeline streams indefinitely. Stop it with `Ctrl+C`.
 
-7. Check the output:
-   The results will be continuously written to the following files in the project's root directory:
-   * scam.txt
-   * inconclusive.txt
-   * benign.txt
+7. Monitor via the Prefect UI:
+   Open [http://localhost:4200](http://localhost:4200) to observe flow runs, task states, and logs in real time.
+
+8. Check the output:
+   Results are continuously written to the following files in the project root:
+   * `scam.txt`
+   * `inconclusive.txt`
+   * `benign.txt`
+   * `irrelevant.txt`
 
 ## 🤝 Contributing
 We welcome contributions from the community! Whether it's adding a new data source, improving a heuristic, or fixing a bug, your help is appreciated. Please feel free to open an issue or submit a pull request.
